@@ -145,7 +145,109 @@ export const useBeverageStore = defineStore("BeverageStore", {
         this.currentSyrup
       );
     },
-    makeBeverage() {},
-    setUser(user: User | null) {},
+
+    setUser(user: User | null) {
+      // Stop previous listener if it exists
+      if (this.snapshotUnsubscribe) {
+        this.snapshotUnsubscribe();
+        this.snapshotUnsubscribe = null;
+      }
+
+      // Save the user
+      this.user = user;
+
+      // Clear beverages if no user
+      if (!user) {
+        this.beverages = [];
+        this.currentBeverage = null;
+        return;
+      }
+
+      // Start new listener for the user's beverages
+      const beveragesQuery = query(
+        collection(db, "beverages"),
+        where("uid", "==", user.uid)
+      );
+
+      this.snapshotUnsubscribe = onSnapshot(
+        beveragesQuery,
+        (snapshot) => {
+          const previousBeverageIds = new Set(this.beverages.map((b) => b.id));
+          this.beverages = snapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          })) as BeverageType[];
+
+          // If a new beverage was added (not in previous list), set it as current
+          const newBeverage = this.beverages.find(
+            (b) => !previousBeverageIds.has(b.id)
+          );
+          if (newBeverage) {
+            this.currentBeverage = newBeverage;
+          } else if (this.currentBeverage) {
+            // Update currentBeverage if it still exists in the list
+            const found = this.beverages.find(
+              (b) => b.id === this.currentBeverage?.id
+            );
+            if (found) {
+              this.currentBeverage = found;
+            } else {
+              this.currentBeverage = null;
+            }
+          }
+        },
+        (error) => {
+          console.error("Error listening to beverages:", error);
+        }
+      );
+    },
+
+    async makeBeverage(): Promise<string> {
+      // Check if user is signed in
+      if (!this.user) {
+        return "No user logged in, please sign in first.";
+      }
+
+      // Check if all required fields are filled
+      if (
+        !this.currentName.trim() ||
+        !this.currentBase ||
+        !this.currentCreamer ||
+        !this.currentSyrup
+      ) {
+        return "Please complete all beverage options and the name before making a beverage.";
+      }
+
+      // Build unique beverage id
+      const beverageId = `beverage-${Date.now()}-${Math.random()
+        .toString(36)
+        .substr(2, 9)}`;
+
+      // Create beverage object
+      const newBeverage: BeverageType = {
+        id: beverageId,
+        uid: this.user.uid,
+        name: this.currentName.trim(),
+        temp: this.currentTemp,
+        base: { ...this.currentBase },
+        syrup: { ...this.currentSyrup },
+        creamer: { ...this.currentCreamer },
+      };
+
+      try {
+        // Write to Firestore
+        // The Firestore listener will automatically update the beverages array
+        // and set currentBeverage when it detects the new beverage
+        await setDoc(doc(db, "beverages", beverageId), newBeverage);
+
+        // Clear the name field
+        this.currentName = "";
+
+        return `Beverage ${newBeverage.name} made successfully!`;
+      } catch (error) {
+        console.error("Error making beverage:", error);
+        return "Error making beverage. Please try again.";
+      }
+    },
   },
 });
